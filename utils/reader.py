@@ -27,4 +27,5 @@ def read_record(psg_path, hypnogram_path, channel='EEG Fpz-Cz'):
     raw.resample(64)
 
     events, _ = mne.events_from_annotations(raw, event_id=LABEL_MAP)
+    events = [e for e in events if e[2] != -1]
     return raw, events
