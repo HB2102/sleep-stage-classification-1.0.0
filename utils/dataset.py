@@ -90,3 +90,67 @@ def create_sequence_dataset(image_dir, label_file, sequence_length=10, batch_siz
     return dataset.map(
             lambda x, y: (x, {'main_output': y, 'aux_output': y})
         ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+
+
+
+def get_sorted_image_label_pairs(image_dir, label_map):
+    image_label_pairs = [
+        (os.path.join(image_dir, fname), label)
+        for fname, label in label_map.items()
+    ]
+    image_label_pairs.sort(key=lambda x: x[0])
+    return image_label_pairs
+
+def create_combined_sequence_dataset(subject_ids, base_dir="../data/spectrograms", sequence_length=10, batch_size=16, shuffle=True):
+    all_sequences = []
+
+    for subj_id in subject_ids:
+        subj_dir = os.path.join(base_dir, subj_id)
+        label_path = os.path.join(subj_dir, "labels.json")
+
+        if not os.path.exists(label_path):
+            print(f"Warning: labels.json not found for {subj_id}")
+            continue
+
+        label_map = load_label_map(label_path)
+        pairs = get_sorted_image_label_pairs(subj_dir, label_map)
+
+        for i in range(len(pairs) - sequence_length + 1):
+            img_seq = [pairs[j][0] for j in range(i, i + sequence_length)]
+            lbl_seq = [pairs[j][1] for j in range(i, i + sequence_length)]
+            all_sequences.append((img_seq, lbl_seq))
+
+    def load_sequence(images, labels):
+        def _load_image(file_path):
+            image = tf.io.read_file(file_path)
+            image = tf.image.decode_png(image, channels=3)
+            image = tf.image.resize(image, [60, 76])
+            image = tf.cast(image, tf.float32) / 255.0
+            return image
+
+        images = tf.map_fn(_load_image, images, fn_output_signature=tf.float32)
+        labels = tf.cast(labels, tf.int32)
+        return images, {
+            'main_output': labels,
+            'aux_output': labels
+        }
+
+    def generator():
+        for img_seq, lbl_seq in all_sequences:
+            yield img_seq, lbl_seq
+
+    dataset = tf.data.Dataset.from_generator(
+        generator,
+        output_signature=(
+            tf.TensorSpec(shape=(sequence_length,), dtype=tf.string),
+            tf.TensorSpec(shape=(sequence_length,), dtype=tf.int32),
+        )
+    )
+
+    dataset = dataset.map(load_sequence, num_parallel_calls=tf.data.AUTOTUNE)
+
+    if shuffle:
+        dataset = dataset.shuffle(buffer_size=len(all_sequences))
+
+    return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
